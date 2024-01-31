@@ -216,7 +216,7 @@ int main(int argc, const char * argv[])
                 uint64_t x0;
                 HYP_ASSERT_SUCCESS(hv_vcpu_get_reg(vcpu, HV_REG_X0, &x0));
                 printf("VM made an HVC call! x0 register holds 0x%llx\n", x0);
-                break;
+                //break;
             } else if (ec == 0x17) {
                 // Exception Class 0x17 is
                 // "SMC instruction execution in AArch64 state, when SMC is not disabled."
