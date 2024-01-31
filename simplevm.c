@@ -19,12 +19,14 @@
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/un.h>
+#include <sys/wait.h>
+#include <sys/socket.h>
 
 #include <Hypervisor/Hypervisor.h>
 
-// undefine SHM to not use the shared memory for the VM main memory
-#define SHM 1
-#define SHM_ID "/vhost-user-memory"
+#include "shm.h"
+#include "uds_fd.h"
 
 // Diagnostics
 #define HYP_ASSERT_SUCCESS(ret) assert((hv_return_t) (ret) == HV_SUCCESS)
@@ -66,10 +68,52 @@ const uint64_t g_kAdrResetTrampoline = 0xF0000000;
 const uint64_t g_szResetTrampolineMemory = 0x10000;
 
 const uint64_t g_kAdrMainMemory = 0x80000000;
-const uint64_t g_szMainMemSize = 0x1000000;
+const uint64_t g_szMainMemSize = SHM_SIZE;
 
 void* g_pResetTrampolineMemory = NULL;
 void* g_pMainMemory = NULL;
+
+int RecvRemoteMemFd() {
+    int memfd = -1;
+
+#ifndef SHM_UDS
+    printf("Using shm_open() to open the memfd\n");
+    // Based on https://gist.github.com/pldubouilh/c007a311707798b42f31a8d1a09f1138
+    // get shared memory file descriptor (NOT a file)
+    memfd = shm_open(SHM_ID, O_RDWR, S_IRUSR | S_IWUSR);
+    if (memfd == -1) {
+        perror("shm_open");
+    }
+#else
+    struct sockaddr_un addr;
+    int sfd;
+
+    printf("Using UDS to receive the memfd\n");
+
+    sfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sfd < 0) {
+        perror("socket");
+        return -1;
+    }
+
+    memset(&addr, 0, sizeof(struct sockaddr_un));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, UDS_PATH, sizeof(addr.sun_path) - 1);
+
+    if (connect(sfd, (struct sockaddr *) &addr, sizeof(struct sockaddr_un)) == -1) {
+        perror("connect");
+        close(sfd);
+        return -1;
+    }
+
+    memfd = recv_fd(sfd);
+
+    close(sfd);
+#endif
+
+    return memfd;
+
+}
 
 int VmpPrepareSystemMemory()
 {
@@ -92,11 +136,8 @@ int VmpPrepareSystemMemory()
 
     // Main memory.
 #ifdef SHM
-    // Based on https://gist.github.com/pldubouilh/c007a311707798b42f31a8d1a09f1138
-    // get shared memory file descriptor (NOT a file)
-    int memfd = shm_open(SHM_ID, O_RDWR, S_IRUSR | S_IWUSR);
-    if (memfd == -1) {
-        perror("shm_open");
+    int memfd = RecvRemoteMemFd();
+    if (memfd < 0) {
         return -ENOMEM;
     }
 

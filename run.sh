@@ -9,6 +9,8 @@ codesign --entitlements simplevm.entitlements --force -s - simplevm
 
 #spctl --add simplevm
 
-./prepare_vm_mem
+./prepare_vm_mem &
+
+sleep 1
 
 ./simplevm

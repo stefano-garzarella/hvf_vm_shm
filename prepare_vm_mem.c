@@ -4,8 +4,12 @@
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/un.h>
 
-#define SHM_ID "/vhost-user-memory"
+#include "shm.h"
+#include "uds_fd.h"
 
 // ARM64 instructions to compute ((2 + 2) - 1) and make a hypervisor call with the result
 const char s_ckVMCode[] = {
@@ -17,19 +21,21 @@ const char s_ckVMCode[] = {
     0x00, 0x00, 0x20, 0xD4, // brk #0
 };
 
-const uint64_t g_kAdrMainMemory = 0x80000000;
-const uint64_t g_szMainMemSize = 0x1000000;
+const uint64_t g_szMainMemSize = SHM_SIZE;
 
 void* g_pMainMemory = NULL;
 
 int main(int argc, const char * argv[])
 {
+    struct sockaddr_un addr;
+    int memfd, sfd, cfd;
+
     // unlink it if it already exists, otherwise ftruncate will fail
     shm_unlink(SHM_ID);
 
     // Based on https://gist.github.com/pldubouilh/c007a311707798b42f31a8d1a09f1138
     // get shared memory file descriptor (NOT a file)
-    int memfd = shm_open(SHM_ID, O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
+    memfd = shm_open(SHM_ID, O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
     if (memfd == -1) {
         perror("shm_open");
         return -ENOMEM;
@@ -52,11 +58,59 @@ int main(int argc, const char * argv[])
     memset(g_pMainMemory, 0, g_szMainMemSize);
     memcpy(g_pMainMemory, s_ckVMCode, sizeof(s_ckVMCode));
 
+    printf("PVM: shared memory set up\n");
+
     // mmap cleanup
     if (munmap(g_pMainMemory, g_szMainMemSize)  == -1) {
         perror("munmap");
-        return 40;
+        return 1;
     }
+
+#ifdef SHM_UDS
+    // create UDS
+    sfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sfd < 0) {
+        perror("socket");
+        return 1;
+    }
+
+    if (unlink(UDS_PATH) == -1 && errno != ENOENT) {
+        perror("unlink");
+        return 1;
+    }
+
+    memset(&addr, 0, sizeof(struct sockaddr_un));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, UDS_PATH, sizeof(addr.sun_path) - 1);
+
+    if (bind(sfd, (struct sockaddr *) &addr, sizeof(struct sockaddr_un)) == -1) {
+        perror("bind");
+        return 1;
+    }
+
+    if (listen(sfd, 5) == -1) {
+        perror("bind");
+        return 1;
+    }
+
+    printf("PVM: waiting remote process...\n");
+
+    cfd = accept(sfd, NULL, NULL);
+    if (cfd == -1) {
+        perror("accept");
+        return 1;
+    }
+
+    // send memfd to the other process
+    if (send_fd(cfd, &memfd)) {
+        return 1;
+    }
+
+    printf("PVM: memfd sent to the remote process\n");
+
+    close(cfd);
+    close(sfd);
+#endif
 
     return 0;
 }
