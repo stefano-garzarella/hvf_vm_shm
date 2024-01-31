@@ -60,12 +60,6 @@ int main(int argc, const char * argv[])
 
     printf("PVM: shared memory set up\n");
 
-    // mmap cleanup
-    if (munmap(g_pMainMemory, g_szMainMemSize)  == -1) {
-        perror("munmap");
-        return 1;
-    }
-
 #ifdef SHM_UDS
     // create UDS
     sfd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -111,6 +105,14 @@ int main(int argc, const char * argv[])
     close(cfd);
     close(sfd);
 #endif
+
+    sleep(2);
+
+    // mmap cleanup
+    if (munmap(g_pMainMemory, g_szMainMemSize)  == -1) {
+        perror("munmap");
+        return 1;
+    }
 
     return 0;
 }
