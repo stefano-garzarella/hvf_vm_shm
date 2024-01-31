@@ -17,8 +17,14 @@
 #include <assert.h>
 #include <errno.h>
 #include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <Hypervisor/Hypervisor.h>
+
+// undefine SHM to not use the shared memory for the VM main memory
+#define SHM 1
+#define SHM_ID "/vhost-user-memory"
 
 // Diagnostics
 #define HYP_ASSERT_SUCCESS(ret) assert((hv_return_t) (ret) == HV_SUCCESS)
@@ -85,6 +91,22 @@ int VmpPrepareSystemMemory()
     HYP_ASSERT_SUCCESS(hv_vm_map(g_pResetTrampolineMemory, g_kAdrResetTrampoline, g_szResetTrampolineMemory, HV_MEMORY_READ | HV_MEMORY_EXEC));
 
     // Main memory.
+#ifdef SHM
+    // Based on https://gist.github.com/pldubouilh/c007a311707798b42f31a8d1a09f1138
+    // get shared memory file descriptor (NOT a file)
+    int memfd = shm_open(SHM_ID, O_RDWR, S_IRUSR | S_IWUSR);
+    if (memfd == -1) {
+        perror("shm_open");
+        return -ENOMEM;
+    }
+
+    // map shared memory to process address space
+    g_pMainMemory = mmap(NULL, g_szMainMemSize, PROT_WRITE, MAP_SHARED, memfd, 0);
+    if (g_pMainMemory == MAP_FAILED) {
+        perror("mmap");
+        return -ENOMEM;
+    }
+#else
     posix_memalign(&g_pMainMemory, 0x1000, g_szMainMemSize);
     if (g_pMainMemory == NULL) {
         return -ENOMEM;
@@ -93,6 +115,7 @@ int VmpPrepareSystemMemory()
     // Copy our code into the VM's RAM
     memset(g_pMainMemory, 0, g_szMainMemSize);
     memcpy(g_pMainMemory, s_ckVMCode, sizeof(s_ckVMCode));
+#endif
 
     // Map the RAM into the VM
     HYP_ASSERT_SUCCESS(hv_vm_map(g_pMainMemory, g_kAdrMainMemory, g_szMainMemSize, HV_MEMORY_READ | HV_MEMORY_WRITE | HV_MEMORY_EXEC));
@@ -202,7 +225,21 @@ int main(int argc, const char * argv[])
 
     // Free memory
     free(g_pResetTrampolineMemory);
+#ifdef SHM
+    // mmap cleanup
+    if (munmap(g_pMainMemory, g_szMainMemSize)  == -1) {
+        perror("munmap");
+        return 40;
+    }
+
+    // shm_open cleanup
+    if (shm_unlink(SHM_ID)  == -1) {
+        perror("shm_unlink");
+        return 100;
+    }
+#else
     free(g_pMainMemory);
+#endif
 
     return 0;
 }
