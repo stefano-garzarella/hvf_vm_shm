@@ -1,3 +1,5 @@
+// Based on https://gist.github.com/imbushuo/51b09e61ecd7b7ac063853ad65cedf34
+
 // simplevm.c: demonstrates Hypervisor.Framework usage in Apple Silicon
 // Based on the work by @zhuowei
 // @imbushuo - Nov 2020
